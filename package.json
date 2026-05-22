@@ -13,6 +13,7 @@
     "template",
     "Smart Home",
     "home automation",
+    "node-red",
     "roborock"
   ],
   "repository": {
@@ -99,8 +100,14 @@
     }
   },
   "main": "src/main.ts",
+  "node-red": {
+    "nodes": {
+      "roborock": "dist/nodered/roborock.js"
+    }
+  },
   "files": [
     "src/",
+    "dist/",
     "admin{,/!(src)/**}/!(tsconfig|tsconfig.*|.eslintrc).json",
     "admin{,/!(src)/**}/*.{html,css,png,svg,jpg,js}",
     "www/",
@@ -136,6 +143,7 @@
     "extract:appplugin-translations": "node scripts/extract_appplugin_translations.js",
     "copy:protocols": "shx mkdir -p build/lib/protocols && shx cp lib/protocols/*.json build/lib/protocols/",
     "build:git": "npm run clean && npm run copy:protocols && tsc -b tsconfig.json && npm run build:www",
+    "build:nodered": "tsc -p tsconfig.nodered.json && shx cp src/nodered/roborock.html dist/nodered/roborock.html && shx mkdir -p dist/lib/protocols && shx cp lib/protocols/*.json dist/lib/protocols/",
     "release": "release-script"
   },
   "bugs": {

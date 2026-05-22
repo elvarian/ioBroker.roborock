@@ -17,6 +17,7 @@
 This adapter allows you the control, get states, cleaning history and view the map of a Roborock vacuum cleaner which is set up in the Roborock app.
 
 - [Requirements](#requirements)
+- [Node-RED node](#node-red-node)
 - [Supported robots](#supported-robots)
 - [Zone cleaning](#zone-cleaning)
 - [Changelog](#changelog)
@@ -30,6 +31,22 @@ This adapter allows you the control, get states, cleaning history and view the m
 - Node.js >= 22.0.0
 - ioBroker.admin >= 7.6.17
 - ioBroker.js-controller >= 6.0.11
+
+## Node-RED node
+
+This repository also contains an experimental Node-RED node. It exposes a shared Roborock Cloud config node and a `roborock` command node.
+
+Build the Node-RED runtime files:
+
+```bash
+npm run build:nodered
+```
+
+Then install the package into Node-RED from this repository or from a packed npm package. The node is registered through `package.json` under `node-red.nodes`.
+
+Supported actions are `devices`, `status`, `start`, `pause`, `stop`, `dock`, `find`, `raw`, and `login-code`. For raw commands, set `msg.payload` to `{ "method": "...", "params": [...] }`.
+
+If the node's action or device id fields are empty, the node reads them from `msg.action` / `msg.command` / `msg.topic` and `msg.duid` / `msg.device`.
 
 ## Supported robots
 

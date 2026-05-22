@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist",
+    "declaration": false,
+    "composite": false,
+    "tsBuildInfoFile": "./dist/tsconfig.nodered.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "src/**/*.json"],
+  "exclude": ["node_modules", "src/www", "test"]
+}

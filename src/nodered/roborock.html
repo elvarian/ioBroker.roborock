@@ -1,0 +1,105 @@
+<script type="text/javascript">
+	RED.nodes.registerType("roborock-config", {
+		category: "config",
+		defaults: {
+			name: { value: "" },
+			region: { value: "eu", required: true },
+			loginMethod: { value: "password", required: true }
+		},
+		credentials: {
+			username: { type: "text", required: true },
+			password: { type: "password" }
+		},
+		label: function () {
+			return this.name || "Roborock";
+		}
+	});
+
+	RED.nodes.registerType("roborock", {
+		category: "home automation",
+		color: "#7db6d8",
+		defaults: {
+			name: { value: "" },
+			connection: { type: "roborock-config", required: true },
+			duid: { value: "" },
+			action: { value: "status" }
+		},
+		inputs: 1,
+		outputs: 1,
+		icon: "font-awesome/fa-home",
+		label: function () {
+			return this.name || "roborock";
+		},
+		paletteLabel: "roborock"
+	});
+</script>
+
+<script type="text/html" data-template-name="roborock-config">
+	<div class="form-row">
+		<label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+		<input type="text" id="node-config-input-name">
+	</div>
+	<div class="form-row">
+		<label for="node-config-input-username"><i class="fa fa-user"></i> Email</label>
+		<input type="text" id="node-config-input-username">
+	</div>
+	<div class="form-row">
+		<label for="node-config-input-password"><i class="fa fa-lock"></i> Password</label>
+		<input type="password" id="node-config-input-password">
+	</div>
+	<div class="form-row">
+		<label for="node-config-input-region"><i class="fa fa-globe"></i> Region</label>
+		<select id="node-config-input-region">
+			<option value="eu">Europe</option>
+			<option value="us">United States</option>
+			<option value="asia">Asia</option>
+			<option value="cn">China</option>
+		</select>
+	</div>
+	<div class="form-row">
+		<label for="node-config-input-loginMethod"><i class="fa fa-key"></i> Login</label>
+		<select id="node-config-input-loginMethod">
+			<option value="password">Password</option>
+			<option value="code">Email code</option>
+		</select>
+	</div>
+</script>
+
+<script type="text/html" data-help-name="roborock-config">
+	<p>Roborock Cloud connection shared by Roborock command nodes.</p>
+</script>
+
+<script type="text/html" data-template-name="roborock">
+	<div class="form-row">
+		<label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+		<input type="text" id="node-input-name">
+	</div>
+	<div class="form-row">
+		<label for="node-input-connection"><i class="fa fa-cog"></i> Connection</label>
+		<input type="text" id="node-input-connection">
+	</div>
+	<div class="form-row">
+		<label for="node-input-duid"><i class="fa fa-microchip"></i> Device</label>
+		<input type="text" id="node-input-duid" placeholder="msg.duid if empty">
+	</div>
+	<div class="form-row">
+		<label for="node-input-action"><i class="fa fa-play"></i> Action</label>
+		<select id="node-input-action">
+			<option value="status">Status</option>
+			<option value="devices">List devices</option>
+			<option value="start">Start cleaning</option>
+			<option value="pause">Pause</option>
+			<option value="stop">Stop</option>
+			<option value="dock">Return to dock</option>
+			<option value="find">Find robot</option>
+			<option value="login-code">Submit login code</option>
+			<option value="raw">Raw command</option>
+		</select>
+	</div>
+</script>
+
+<script type="text/html" data-help-name="roborock">
+	<p>Sends Roborock commands. If action is blank or overridden, use <code>msg.action</code>, <code>msg.command</code>, or <code>msg.topic</code>.</p>
+	<p>For raw commands, set <code>msg.payload</code> to <code>{ "method": "get_prop", "params": ["get_status"] }</code>.</p>
+	<p>For email-code login, send the received code with action <code>login-code</code> and the code in <code>msg.payload</code>.</p>
+</script>

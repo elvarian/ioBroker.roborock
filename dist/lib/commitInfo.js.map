@@ -1,0 +1,1 @@
+{"version":3,"file":"commitInfo.js","sourceRoot":"","sources":["../../src/lib/commitInfo.ts"],"names":[],"mappings":";;;AAAa,QAAA,UAAU,GAAG;IACzB,UAAU,EAAE,qBAAqB;IACjC,UAAU,EAAE,cAAc;CAC1B,CAAC","sourcesContent":["export const commitInfo = {\n\tcommitDate: \"19.4.2026, 10:37:07\",\n\tcommitHash: \"0.7.0-beta.1\",\n};\n"]}

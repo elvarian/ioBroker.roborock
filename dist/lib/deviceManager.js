@@ -1,0 +1,477 @@
+"use strict";
+// src/lib/DeviceManager.ts
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DeviceManager = void 0;
+// Import BaseDeviceFeatures value
+const baseDeviceFeatures_1 = require("./features/baseDeviceFeatures");
+const fallbackFeatures_1 = require("./features/fallbackFeatures");
+const v1VacuumFeatures_1 = require("./features/vacuum/v1VacuumFeatures");
+const productHelper_1 = require("./productHelper");
+const b01Variant_1 = require("./b01Variant");
+const B01StateSemantics_1 = require("./map/b01/B01StateSemantics");
+// Import indices to trigger decorators
+require("./features/vacuum/index");
+const Q7VacuumFeatures_1 = require("./features/vacuum/b01/Q7VacuumFeatures");
+const Q10VacuumFeatures_1 = require("./features/vacuum/b01/Q10VacuumFeatures");
+function createFeaturesForModel(adapter, duid, robotModel, productCategory, protocolVersion) {
+    const dependencies = {
+        adapter: adapter,
+        config: adapter.config,
+        http_api: adapter.http_api,
+        ensureState: adapter.ensureState.bind(adapter),
+        ensureFolder: adapter.ensureFolder.bind(adapter),
+        log: adapter.log,
+    };
+    // dynamic profile creation
+    let dynamicProfile = v1VacuumFeatures_1.DEFAULT_PROFILE;
+    const productInfo = adapter.http_api.productInfo;
+    if (productInfo) {
+        const fanMappings = productHelper_1.ProductHelper.getStateDefinitions(productInfo, robotModel, "fan_power");
+        const mopMappings = productHelper_1.ProductHelper.getStateDefinitions(productInfo, robotModel, "mop_mode");
+        const waterMappings = productHelper_1.ProductHelper.getStateDefinitions(productInfo, robotModel, "water_box_mode");
+        const errorMappings = productHelper_1.ProductHelper.getStateDefinitions(productInfo, robotModel, "error");
+        const stateMappings = productHelper_1.ProductHelper.getStateDefinitions(productInfo, robotModel, "state");
+        if (Object.keys(fanMappings).length > 0 || Object.keys(mopMappings).length > 0 || Object.keys(waterMappings).length > 0 || Object.keys(errorMappings).length > 0 || Object.keys(stateMappings).length > 0) {
+            dynamicProfile = {
+                ...v1VacuumFeatures_1.DEFAULT_PROFILE,
+                mappings: {
+                    fan_power: Object.keys(fanMappings).length > 0 ? fanMappings : v1VacuumFeatures_1.DEFAULT_PROFILE.mappings.fan_power,
+                    mop_mode: Object.keys(mopMappings).length > 0 ? mopMappings : v1VacuumFeatures_1.DEFAULT_PROFILE.mappings.mop_mode,
+                    water_box_mode: Object.keys(waterMappings).length > 0 ? waterMappings : v1VacuumFeatures_1.DEFAULT_PROFILE.mappings.water_box_mode,
+                    error_code: Object.keys(errorMappings).length > 0 ? errorMappings : undefined,
+                    state: Object.keys(stateMappings).length > 0 ? stateMappings : undefined,
+                }
+            };
+        }
+    }
+    // B01 Detection: Prioritize Protocol Version over Registered Model Class
+    // This ensures that B01 devices always get the B01 feature handler, even if they share a model ID with a V1 device.
+    if (protocolVersion === "B01") {
+        const b01Variant = (0, b01Variant_1.getB01VariantFromModel)(robotModel);
+        const HandlerClass = b01Variant === "Q10" ? Q10VacuumFeatures_1.Q10VacuumFeatures : Q7VacuumFeatures_1.Q7VacuumFeatures;
+        const handler = new HandlerClass(dependencies, duid, robotModel, { staticFeatures: [] }, dynamicProfile);
+        handler.protocolVersion = protocolVersion;
+        return handler;
+    }
+    // Get registered model class (optional: only for model-specific overrides)
+    const ModelClass = baseDeviceFeatures_1.BaseDeviceFeatures.getRegisteredModelClass(robotModel);
+    if (ModelClass) {
+        // Specific model class registered – use it (e.g. custom profile/features)
+        const handler = new ModelClass(dependencies, duid);
+        handler.protocolVersion = protocolVersion;
+        return handler;
+    }
+    // No model-specific class: auto-detect by category. Log once so users report unknown models for full support.
+    const isVacuum = productCategory === "robot.vacuum.cleaner" || productCategory === "roborock.vacuum";
+    if (isVacuum) {
+        adapter.rLog("System", duid, "Info", undefined, undefined, `Model "${robotModel}" is not explicitly supported yet; using auto-detected vacuum features. If something is missing or wrong, please report your model (e.g. via GitHub Issues) so we can add full support with correct parameters.`, "info");
+        const deducedFeatures = productInfo ? productHelper_1.ProductHelper.deduceFeatures(productInfo, robotModel) : new Set();
+        const handler = new fallbackFeatures_1.FallbackVacuumFeatures(dependencies, duid, robotModel, dynamicProfile, {
+            staticFeatures: Array.from(deducedFeatures),
+            autoDetected: true
+        });
+        handler.protocolVersion = protocolVersion;
+        return handler;
+    }
+    // Unknown category: warn and use generic fallback
+    adapter.rLog("System", duid, "Warn", undefined, undefined, `Model "${robotModel}" (Category: ${productCategory}) not registered. Using fallback (Protocol: ${protocolVersion || "Unknown"}).`, "warn");
+    const handler = new fallbackFeatures_1.FallbackBaseFeatures(dependencies, duid, robotModel);
+    handler.protocolVersion = protocolVersion;
+    return handler;
+}
+class DeviceManager {
+    adapter;
+    // Interval handle
+    mainUpdateInterval = undefined;
+    pollingDevices = new Set();
+    deviceFeatureHandlers = new Map();
+    constructor(adapter) {
+        this.adapter = adapter;
+    }
+    /**
+     * Initializes devices from HTTP API.
+     */
+    async initializeDevices() {
+        const devices = this.adapter.http_api.getDevices();
+        this.adapter.rLog("System", null, "Info", undefined, undefined, `Initializing data for ${devices.length} devices...`, "info");
+        const initPromises = [];
+        const cleanSummaryHandlers = [];
+        for (const device of devices) {
+            const duid = device.duid;
+            const initTask = async () => {
+                try {
+                    const model = this.adapter.http_api.getRobotModel(duid);
+                    const category = this.adapter.http_api.getProductCategory(duid);
+                    // Ensure model exists
+                    if (!model) {
+                        this.adapter.rLog("System", duid, "Warn", undefined, undefined, "Could not find model. Skipping init.", "warn");
+                        return;
+                    }
+                    const version = await this.adapter.getDeviceProtocolVersion(duid);
+                    const handler = createFeaturesForModel(this.adapter, duid, model, category, version);
+                    // Store handler and initialize
+                    this.deviceFeatureHandlers.set(duid, handler);
+                    await this.adapter.extendObject(`Devices.${duid}`, {
+                        type: "device",
+                        common: {
+                            name: device.name || duid, // Use cloud name or DUID
+                            // Link online status
+                            statusStates: {
+                                onlineId: `${this.adapter.namespace}.Devices.${duid}.deviceInfo.online`,
+                            },
+                        },
+                        native: {
+                            duid: duid,
+                            model: model,
+                            category: category,
+                        },
+                    });
+                    await this.adapter.updateDeviceInfo(duid, devices);
+                    // Apply static features
+                    await handler.initialize(device.online);
+                    if (device.online) {
+                        // Fire cleaning summary (background)
+                        cleanSummaryHandlers.push(handler);
+                    }
+                }
+                catch (error) {
+                    this.adapter.rLog("System", duid, "Warn", undefined, undefined, `Failed initial poll: ${this.adapter.errorMessage(error)}`, "warn");
+                }
+            };
+            initPromises.push(initTask());
+        }
+        await Promise.all(initPromises);
+        const deviceSummaries = [];
+        for (const [duid, handler] of this.deviceFeatureHandlers) {
+            const model = handler.robotModel || "Unknown";
+            const version = handler.protocolVersion || "Unknown";
+            deviceSummaries.push(`${duid} (${model}, ${version})`);
+        }
+        this.adapter.rLog("System", null, "Info", undefined, undefined, `Initialization complete for ${this.deviceFeatureHandlers.size} devices: [${deviceSummaries.join(", ")}]`, "info");
+        // Fire cleaning summary (background)
+        for (const handler of cleanSummaryHandlers) {
+            handler.updateCleanSummary().catch((e) => {
+                this.adapter.rLog("System", handler.duid, "Warn", undefined, undefined, `Background summary update failed: ${this.adapter.errorMessage(e)}`, "warn");
+            });
+        }
+        // Cleanup orphaned devices (non-blocking)
+        this.cleanupOrphanedDevices(devices.map((d) => d.duid)).catch((e) => {
+            this.adapter.rLog("System", null, "Warn", undefined, undefined, `Device cleanup failed: ${this.adapter.errorMessage(e)}`, "warn");
+        });
+    }
+    /**
+     * Removes orphaned device folders.
+     */
+    async cleanupOrphanedDevices(activeDuids) {
+        const activeDuidSet = new Set(activeDuids);
+        const namespace = this.adapter.namespace;
+        try {
+            // Get all device objects (more efficient than getting all objects)
+            const devices = await this.adapter.getDevicesAsync();
+            const deviceFolders = devices.map((obj) => obj._id).filter((id) => id.startsWith(`${namespace}.Devices.`) && id.split(".").length === 4);
+            // Safety guard: NEVER delete all devices at once.
+            // This covers the case where the cloud returns an empty list incorrectly.
+            if (activeDuids.length === 0 && deviceFolders.length > 0) {
+                this.adapter.rLog("System", null, "Warn", undefined, undefined, "Cleanup of orphaned devices blocked: API returned 0 devices, but local states exist. Mass deletion prevented.", "warn");
+                return;
+            }
+            for (const folderId of deviceFolders) {
+                const duid = folderId.split(".").pop();
+                if (duid && !activeDuidSet.has(duid)) {
+                    this.adapter.rLog("System", duid, "Info", undefined, undefined, `Deleting orphaned device folder: ${folderId}`, "info");
+                    await this.adapter.delObjectAsync(folderId, { recursive: true });
+                }
+            }
+        }
+        catch (error) {
+            this.adapter.rLog("System", null, "Error", undefined, undefined, `Failed to cleanup orphaned devices: ${this.adapter.errorMessage(error)}`, "error");
+        }
+    }
+    // Track previous state
+    lastStateCode = new Map();
+    skipPollUntilNextHomeData = new Set(); // cleared each slow tick
+    /**
+     * Get current state code. V1 uses deviceStatus.state, B01 uses deviceStatus.status.
+     */
+    async getDeviceState(duid) {
+        const [state, status] = await Promise.all([
+            this.adapter.getStateAsync(`Devices.${duid}.deviceStatus.state`),
+            this.adapter.getStateAsync(`Devices.${duid}.deviceStatus.status`),
+        ]);
+        const val = (state?.val != null ? state.val : status?.val) ?? 0;
+        return Number(val);
+    }
+    /**
+     * Check if robot is active.
+     */
+    isActiveState(stateCode) {
+        const activeStates = [
+            5, // Cleaning
+            6, // Returning Dock
+            7, // Manual Mode
+            11, // Spot Cleaning
+            15, // Docking
+            16, // Go To
+            17, // Zone Clean
+            18, // Room Clean
+            22, // Emptying dust container
+            23, // Washing the mop
+            26, // Going to wash the mop
+            29, // Mapping
+        ];
+        return activeStates.includes(stateCode);
+    }
+    /** Parked/docked: fetch history only then (cloud has new record). 4 = docked, 8 = Charging, 100 = Fully Charged. */
+    isParkedState(stateCode) {
+        return (0, B01StateSemantics_1.isB01ParkedState)(stateCode);
+    }
+    /** Starts polling. updateInterval (UI) drives everything except TCP; TCP keepalive is fixed 30s. */
+    startPolling() {
+        const mainPollInterval = this.adapter.config.updateInterval; // e.g. 60s
+        this.adapter.rLog("System", null, "Info", undefined, undefined, `Starting main poll (every ${mainPollInterval}s). Heavy data updates only after activity finishes.`, "info");
+        let mainUpdateCount = mainPollInterval; // Slow loop counter
+        this.mainUpdateInterval = this.adapter.setInterval(async () => {
+            mainUpdateCount++;
+            const isSlowTick = mainUpdateCount >= mainPollInterval;
+            if (isSlowTick) {
+                mainUpdateCount = 0;
+                this.skipPollUntilNextHomeData.clear();
+                this.adapter.rLog("System", null, "Debug", undefined, undefined, "Running scheduled main device update...", "debug");
+                await this.adapter.http_api.updateHomeData();
+                void this.adapter.local_api?.refreshStaleLocalEndpoints?.("slow poll")?.catch((e) => {
+                    this.adapter.rLog("TCP", null, "Debug", undefined, undefined, `Scheduled local endpoint refresh failed: ${this.adapter.errorMessage(e)}`, "debug");
+                });
+            }
+            const cloudDevices = this.adapter.http_api.getDevices();
+            for (const device of cloudDevices) {
+                const duid = device.duid;
+                if (this.skipPollUntilNextHomeData.has(duid))
+                    continue;
+                const handler = this.deviceFeatureHandlers.get(duid);
+                if (!handler)
+                    continue;
+                const lastState = this.lastStateCode.get(duid) || 0;
+                const isActive = this.isActiveState(lastState);
+                const isFastTick = (mainUpdateCount % 2 === 0);
+                const shouldPoll = isSlowTick || (isActive && isFastTick);
+                if (!shouldPoll)
+                    continue;
+                try {
+                    if (isSlowTick) {
+                        await this.adapter.updateDeviceInfo(duid, cloudDevices);
+                    }
+                    if (!device.online)
+                        continue;
+                    const version = await this.adapter.getDeviceProtocolVersion(duid);
+                    if (this.pollingDevices.has(duid)) {
+                        this.adapter.rLog("System", duid, "Debug", version, undefined, "Skipping poll because previous poll is still running.", "debug");
+                        continue;
+                    }
+                    this.pollingDevices.add(duid);
+                    try {
+                        switch (version) {
+                            case "B01":
+                                await this.pollB01Device(handler, duid);
+                                break;
+                            case "A01":
+                                await this.pollA01Device(handler, duid);
+                                break;
+                            case "L01":
+                            case "1.0":
+                                await this.pollV1Device(handler, duid);
+                                break;
+                            default:
+                                this.adapter.rLog("System", duid, "Warn", version, undefined, "Unknown protocol version. Skipping poll.", "warn");
+                        }
+                    }
+                    finally {
+                        this.pollingDevices.delete(duid);
+                    }
+                }
+                catch (error) {
+                    this.adapter.catchError(error, "mainUpdateInterval", duid);
+                    this.skipPollUntilNextHomeData.add(duid);
+                }
+            }
+        }, 1000); // 1s ticker
+    }
+    /** On state change: history only when parked (4/8/100) or idle→parked (3→4); else only map. */
+    async onDeviceStateChange(duid, newStateVal) {
+        const handler = this.deviceFeatureHandlers.get(duid);
+        if (!handler)
+            return;
+        const oldVal = this.lastStateCode.get(duid) ?? 0;
+        const wasActive = this.isActiveState(oldVal);
+        const isActive = this.isActiveState(newStateVal);
+        const isParked = this.isParkedState(newStateVal);
+        const wasIdle = oldVal === 3;
+        this.lastStateCode.set(duid, newStateVal);
+        if (wasActive && !isActive) {
+            const version = handler.protocolVersion || "?";
+            if (isParked) {
+                this.adapter.rLog("System", duid, "Info", version, undefined, `Activity finished (State ${oldVal} -> ${newStateVal}). Fetching history + map...`, "info");
+                await handler.updateMap();
+                await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+            }
+            else {
+                this.adapter.rLog("System", duid, "Info", version, undefined, `Activity finished (State ${oldVal} -> ${newStateVal}). Fetching map...`, "info");
+                await handler.updateMap();
+            }
+        }
+        else if (wasIdle && isParked) {
+            const version = handler.protocolVersion || "?";
+            this.adapter.rLog("System", duid, "Info", version, undefined, `Idle -> Parked (State ${oldVal} -> ${newStateVal}). Fetching history + map...`, "info");
+            await handler.updateMap();
+            await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+        }
+    }
+    /**
+     * Polling logic for B01 devices.
+     */
+    async pollB01Device(handler, duid) {
+        await handler.updateStatus();
+        const currentState = await this.getDeviceState(duid);
+        const lastState = this.lastStateCode.get(duid) || 0;
+        const isActive = this.isActiveState(currentState);
+        const wasActive = this.isActiveState(lastState);
+        if (isActive) {
+            await handler.updateMap();
+        }
+        if (wasActive && !isActive) {
+            const isParked = this.isParkedState(currentState);
+            if (isParked) {
+                this.adapter.rLog("System", duid, "Info", "B01", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+                await handler.updateMap();
+                await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+            }
+            else {
+                this.adapter.rLog("System", duid, "Info", "B01", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching map...`, "info");
+                await handler.updateMap();
+            }
+        }
+        else if (lastState === 3 && this.isParkedState(currentState)) {
+            this.adapter.rLog("System", duid, "Info", "B01", undefined, `Idle -> Parked (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+            await handler.updateMap();
+            await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+        }
+        this.lastStateCode.set(duid, currentState);
+    }
+    /**
+     * Polling logic for A01 devices.
+     */
+    async pollA01Device(handler, duid) {
+        await handler.updateStatus();
+        const currentState = await this.getDeviceState(duid);
+        const lastState = this.lastStateCode.get(duid) || 0;
+        const isActive = this.isActiveState(currentState);
+        const wasActive = this.isActiveState(lastState);
+        if (isActive) {
+            await handler.updateMap();
+        }
+        if (wasActive && !isActive) {
+            const isParked = this.isParkedState(currentState);
+            if (isParked) {
+                this.adapter.rLog("System", duid, "Info", "A01", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+                await handler.updateMap();
+                await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+            }
+            else {
+                this.adapter.rLog("System", duid, "Info", "A01", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching map...`, "info");
+                await handler.updateMap();
+            }
+        }
+        else if (lastState === 3 && this.isParkedState(currentState)) {
+            this.adapter.rLog("System", duid, "Info", "A01", undefined, `Idle -> Parked (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+            await handler.updateMap();
+            await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+        }
+        this.lastStateCode.set(duid, currentState);
+    }
+    /**
+     * Polling logic for V1 (Legacy) devices.
+     */
+    async pollV1Device(handler, duid) {
+        await handler.updateStatus();
+        const currentState = await this.getDeviceState(duid);
+        const lastState = this.lastStateCode.get(duid) || 0;
+        const isActive = this.isActiveState(currentState);
+        const wasActive = this.isActiveState(lastState);
+        if (isActive) {
+            await handler.updateMap();
+        }
+        if (wasActive && !isActive) {
+            const isParked = this.isParkedState(currentState);
+            if (isParked) {
+                this.adapter.rLog("System", duid, "Info", "1.0", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+                await handler.updateMap();
+                await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+            }
+            else {
+                this.adapter.rLog("System", duid, "Info", "1.0", undefined, `Activity finished (State ${lastState} -> ${currentState}). Fetching map...`, "info");
+                await handler.updateMap();
+            }
+        }
+        else if (lastState === 3 && this.isParkedState(currentState)) {
+            this.adapter.rLog("System", duid, "Info", "1.0", undefined, `Idle -> Parked (State ${lastState} -> ${currentState}). Fetching history + map...`, "info");
+            await handler.updateMap();
+            await handler.updateCleanSummary().catch((e) => this.adapter.catchError(e, "updateCleanSummary", duid));
+        }
+        this.lastStateCode.set(duid, currentState);
+    }
+    /**
+     * Stops polling.
+     */
+    stopPolling() {
+        if (this.mainUpdateInterval) {
+            // Cast to any for ioBroker interval
+            this.adapter.clearInterval(this.mainUpdateInterval);
+            this.mainUpdateInterval = undefined;
+        }
+    }
+    /**
+     * Fetches non-status data.
+     */
+    async updateDeviceData(handler, duid) {
+        await Promise.all([
+            handler.updateFirmwareFeatures(),
+            handler.updateMultiMapsList(),
+            handler.updateRoomMapping(),
+            handler.updateConsumables(),
+            handler.updateTimers(),
+            handler.updateNetworkInfo(),
+        ]);
+        await this.adapter.checkForNewFirmware(duid);
+        // Model-specific requests
+        await handler.updateExtraStatus();
+    }
+    /**
+     * Fetches consumable percentages.
+     */
+    async updateConsumablesPercent(duid) {
+        const handler = this.deviceFeatureHandlers.get(duid);
+        if (!handler)
+            return;
+        const devices = this.adapter.http_api.getDevices();
+        const device = devices.find((d) => d.duid === duid);
+        if (!device?.deviceStatus)
+            return; // 'deviceStatus' exists on Device type
+        const status = device.deviceStatus;
+        const consumableMap = {
+            "125": "main_brush_life",
+            "126": "side_brush_life",
+            "127": "filter_life",
+        };
+        for (const [attribute, value] of Object.entries(status)) {
+            // Cloud consumable percentages
+            if (attribute === "125" || attribute === "126" || attribute === "127") {
+                const val = value >= 0 && value <= 100 ? value : 0;
+                const mappedName = consumableMap[attribute];
+                const common = handler.getCommonConsumable(mappedName); // Use mapped name
+                await this.adapter.ensureState(`Devices.${duid}.consumables.${mappedName}`, common || {});
+                await this.adapter.setStateChanged(`Devices.${duid}.consumables.${mappedName}`, { val, ack: true });
+            }
+        }
+    }
+}
+exports.DeviceManager = DeviceManager;
+//# sourceMappingURL=deviceManager.js.map
