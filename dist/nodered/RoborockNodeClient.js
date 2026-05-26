@@ -93,17 +93,31 @@ class RoborockNodeClient extends node_events_1.EventEmitter {
     getDevices() {
         return this.http_api.getDevices();
     }
+    getDeviceSummaries() {
+        return this.getDevices().map((device) => ({
+            duid: device.duid,
+            name: device.name,
+            pv: device.pv,
+            online: device.online,
+            hasLocalKey: !!device.localKey,
+            productId: device.productId,
+        }));
+    }
     async execute(command, duid, params) {
         await this.connect();
         if (!duid && command !== "devices") {
             throw new Error("Roborock device id (duid) is missing");
         }
         if (command === "devices") {
-            return this.getDevices();
+            return this.getDeviceSummaries();
         }
+        const device = this.getDeviceOrThrow(duid);
         const protocol = await this.getDeviceProtocolVersion(duid);
         const variant = await this.getB01Variant(duid);
         const normalized = String(command || "raw").toLowerCase();
+        if (!device.localKey) {
+            throw new Error(`Roborock device '${duid}' has no localKey in HomeData; cannot send encrypted commands. Check the DUID with action 'devices' and use the owning Roborock account if this is a shared device.`);
+        }
         if (normalized === "raw") {
             const raw = this.normalizeRawParams(params);
             return this.requestsHandler.sendRequest(duid, raw.method, raw.params);
@@ -135,6 +149,15 @@ class RoborockNodeClient extends node_events_1.EventEmitter {
             return this.requestsHandler.sendRequest(duid, commandSpec.method, commandSpec.params);
         }
         throw new Error(`Unsupported B01 command '${command}'. Use 'raw' for custom Roborock methods.`);
+    }
+    getDeviceOrThrow(duid) {
+        const devices = this.getDevices();
+        const device = devices.find((item) => item.duid === duid);
+        if (!device) {
+            const knownDevices = devices.map((item) => `${item.name || "unnamed"} (${item.duid})`).join(", ") || "none";
+            throw new Error(`Roborock device '${duid}' was not found in HomeData. Known devices: ${knownDevices}`);
+        }
+        return device;
     }
     normalizeRawParams(params) {
         if (typeof params !== "object" || params === null) {

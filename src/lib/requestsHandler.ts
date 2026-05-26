@@ -225,7 +225,10 @@ export class RoborockRequest {
 		const localConnectionState = this.adapter.local_api.isConnected(this.duid);
 
 		if (!roborockMessage) {
-			const errorMsg = "Failed to build buildRoborockMessage!";
+			const localKey = this.adapter.http_api.getMatchedLocalKeys().get(this.duid);
+			const errorMsg = !localKey
+				? `Failed to build Roborock message: missing localKey for device '${this.duid}'. Check the DUID with action 'devices' and use the owning Roborock account if this is a shared device.`
+				: `Failed to build Roborock message: unsupported or incomplete protocol context for device '${this.duid}' (version=${version}, protocol=${protocol}).`;
 			this.adapter.catchError(errorMsg, "function sendRequest", this.duid);
 			this.reject(new Error(errorMsg));
 			return this.promise;

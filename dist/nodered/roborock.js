@@ -2,7 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const RoborockNodeClient_1 = require("./RoborockNodeClient");
 function payloadCommand(msg, configuredAction) {
+    const messageAction = String(msg.action || msg.command || msg.topic || "").toLowerCase();
+    if (messageAction === "login-code")
+        return messageAction;
     return String(configuredAction || msg.action || msg.command || msg.topic || "status").toLowerCase();
+}
+function payloadParams(msg, action) {
+    if (action === "raw")
+        return msg.payload;
+    if (Object.prototype.hasOwnProperty.call(msg, "params"))
+        return msg.params;
+    return undefined;
 }
 function payloadDuid(msg, configuredDuid) {
     return String(configuredDuid || msg.duid || msg.device || msg.deviceId || "");
@@ -57,7 +67,7 @@ module.exports = function registerRoborockNodes(RED) {
                 }
                 const action = payloadCommand(msg, configuredAction);
                 const duid = payloadDuid(msg, configuredDuid);
-                const params = action === "raw" ? msg.payload : msg.payload;
+                const params = payloadParams(msg, action);
                 try {
                     if (action === "login-code") {
                         const code = String(msg.payload?.code || msg.payload || "");

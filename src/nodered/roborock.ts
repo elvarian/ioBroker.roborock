@@ -28,7 +28,15 @@ type RoborockConfigNode = NodeRedNode & {
 };
 
 function payloadCommand(msg: any, configuredAction: string): string {
+	const messageAction = String(msg.action || msg.command || msg.topic || "").toLowerCase();
+	if (messageAction === "login-code") return messageAction;
 	return String(configuredAction || msg.action || msg.command || msg.topic || "status").toLowerCase();
+}
+
+function payloadParams(msg: any, action: string): unknown {
+	if (action === "raw") return msg.payload;
+	if (Object.prototype.hasOwnProperty.call(msg, "params")) return msg.params;
+	return undefined;
 }
 
 function payloadDuid(msg: any, configuredDuid: string): string {
@@ -90,7 +98,7 @@ module.exports = function registerRoborockNodes(RED: NodeRedRuntime): void {
 
 				const action = payloadCommand(msg, configuredAction);
 				const duid = payloadDuid(msg, configuredDuid);
-				const params = action === "raw" ? msg.payload : msg.payload;
+				const params = payloadParams(msg, action);
 
 				try {
 					if (action === "login-code") {

@@ -122,6 +122,17 @@ export class RoborockNodeClient extends EventEmitter {
 		return this.http_api.getDevices();
 	}
 
+	public getDeviceSummaries(): Array<{ duid: string; name?: string; pv: string; online: boolean; hasLocalKey: boolean; productId: string }> {
+		return this.getDevices().map((device) => ({
+			duid: device.duid,
+			name: device.name,
+			pv: device.pv,
+			online: device.online,
+			hasLocalKey: !!device.localKey,
+			productId: device.productId,
+		}));
+	}
+
 	public async execute(command: RoborockCommand | string, duid: string, params?: unknown): Promise<unknown> {
 		await this.connect();
 		if (!duid && command !== "devices") {
@@ -129,12 +140,16 @@ export class RoborockNodeClient extends EventEmitter {
 		}
 
 		if (command === "devices") {
-			return this.getDevices();
+			return this.getDeviceSummaries();
 		}
 
+		const device = this.getDeviceOrThrow(duid);
 		const protocol = await this.getDeviceProtocolVersion(duid);
 		const variant = await this.getB01Variant(duid);
 		const normalized = String(command || "raw").toLowerCase();
+		if (!device.localKey) {
+			throw new Error(`Roborock device '${duid}' has no localKey in HomeData; cannot send encrypted commands. Check the DUID with action 'devices' and use the owning Roborock account if this is a shared device.`);
+		}
 
 		if (normalized === "raw") {
 			const raw = this.normalizeRawParams(params);
@@ -174,6 +189,16 @@ export class RoborockNodeClient extends EventEmitter {
 			return this.requestsHandler.sendRequest(duid, commandSpec.method, commandSpec.params);
 		}
 		throw new Error(`Unsupported B01 command '${command}'. Use 'raw' for custom Roborock methods.`);
+	}
+
+	private getDeviceOrThrow(duid: string): Device {
+		const devices = this.getDevices();
+		const device = devices.find((item) => item.duid === duid);
+		if (!device) {
+			const knownDevices = devices.map((item) => `${item.name || "unnamed"} (${item.duid})`).join(", ") || "none";
+			throw new Error(`Roborock device '${duid}' was not found in HomeData. Known devices: ${knownDevices}`);
+		}
+		return device;
 	}
 
 	private normalizeRawParams(params: unknown): { method: string; params: unknown } {
