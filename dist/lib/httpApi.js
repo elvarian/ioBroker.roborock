@@ -151,11 +151,19 @@ class http_api {
      * Logs in (if necessary) and sets up the authenticated "Real API" with Hawk authentication.
      */
     loginCodeResolver = null;
+    pendingLoginCode = null;
     submitLoginCode(code) {
-        if (this.loginCodeResolver) {
-            this.loginCodeResolver(code);
-            this.loginCodeResolver = null;
+        const normalizedCode = String(code || "").trim();
+        if (!/^\d{6}$/.test(normalizedCode)) {
+            return { accepted: false, delivered: false };
         }
+        if (this.loginCodeResolver) {
+            this.loginCodeResolver(normalizedCode);
+            this.loginCodeResolver = null;
+            return { accepted: true, delivered: true };
+        }
+        this.pendingLoginCode = normalizedCode;
+        return { accepted: true, delivered: false };
     }
     async initializeRealApi() {
         this.adapter.rLog("HTTP", null, "Debug", "Cloud", undefined, "Initializing Real API (Hawk Auth)", "debug");
@@ -201,8 +209,13 @@ class http_api {
                 // If not using password flow (or fell back)
                 if (!this.userData && !usePasswordFlow) {
                     this.adapter.rLog("HTTP", null, "Info", "Cloud", undefined, "Starting Direct 2FA Login Flow...", "info");
-                    // 1. Request Email Code
-                    await this.requestEmailCode(this.adapter.config.username);
+                    if (this.pendingLoginCode) {
+                        this.adapter.rLog("HTTP", null, "Info", "Cloud", undefined, "Using queued 2FA login code; skipping new email code request.", "info");
+                    }
+                    else {
+                        // 1. Request Email Code
+                        await this.requestEmailCode(this.adapter.config.username);
+                    }
                     const codeTarget = String(this.adapter.namespace || "").startsWith("node-red")
                         ? "Please send the 6-digit code to a Roborock Node-RED node using action 'login-code' and msg.payload = '<code>'."
                         : "Please enter the 6-digit code into the state 'roborock.0.loginCode' immediately.";
@@ -224,6 +237,13 @@ class http_api {
                     try {
                         code = await new Promise((resolve, reject) => {
                             this.loginCodeResolver = resolve;
+                            if (this.pendingLoginCode) {
+                                const pendingLoginCode = this.pendingLoginCode;
+                                this.pendingLoginCode = null;
+                                this.loginCodeResolver = null;
+                                resolve(pendingLoginCode);
+                                return;
+                            }
                             // Timeout after 15 minutes
                             setTimeout(() => {
                                 if (this.loginCodeResolver) {

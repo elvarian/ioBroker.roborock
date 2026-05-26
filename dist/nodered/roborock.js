@@ -61,9 +61,12 @@ module.exports = function registerRoborockNodes(RED) {
                 try {
                     if (action === "login-code") {
                         const code = String(msg.payload?.code || msg.payload || "");
-                        connection.client.http_api.submitLoginCode(code);
-                        msg.payload = { ok: true };
-                        node.status({ fill: "green", shape: "dot", text: "code sent" });
+                        const result = connection.client.http_api.submitLoginCode(code);
+                        if (!result.accepted) {
+                            throw new Error("Login code must be a 6-digit code");
+                        }
+                        msg.payload = { ok: true, delivered: result.delivered, queued: !result.delivered };
+                        node.status({ fill: "green", shape: "dot", text: result.delivered ? "code sent" : "code queued" });
                         nodeSend(msg);
                         done?.();
                         return;

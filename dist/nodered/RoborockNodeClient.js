@@ -73,7 +73,10 @@ class RoborockNodeClient extends node_events_1.EventEmitter {
     }
     async connect() {
         if (!this.readyPromise) {
-            this.readyPromise = this.connectInternal();
+            this.readyPromise = this.connectInternal().catch((error) => {
+                this.readyPromise = null;
+                throw error;
+            });
         }
         return this.readyPromise;
     }

@@ -195,12 +195,22 @@ export class http_api {
 	 * Logs in (if necessary) and sets up the authenticated "Real API" with Hawk authentication.
 	 */
 	private loginCodeResolver: ((code: string) => void) | null = null;
+	private pendingLoginCode: string | null = null;
 
-	public submitLoginCode(code: string): void {
-		if (this.loginCodeResolver) {
-			this.loginCodeResolver(code);
-			this.loginCodeResolver = null;
+	public submitLoginCode(code: string): { accepted: boolean; delivered: boolean } {
+		const normalizedCode = String(code || "").trim();
+		if (!/^\d{6}$/.test(normalizedCode)) {
+			return { accepted: false, delivered: false };
 		}
+
+		if (this.loginCodeResolver) {
+			this.loginCodeResolver(normalizedCode);
+			this.loginCodeResolver = null;
+			return { accepted: true, delivered: true };
+		}
+
+		this.pendingLoginCode = normalizedCode;
+		return { accepted: true, delivered: false };
 	}
 
 	async initializeRealApi(): Promise<void> {
@@ -247,8 +257,12 @@ export class http_api {
 				if (!this.userData && !usePasswordFlow) {
 					this.adapter.rLog("HTTP", null, "Info", "Cloud", undefined, "Starting Direct 2FA Login Flow...", "info");
 
-					// 1. Request Email Code
-					await this.requestEmailCode(this.adapter.config.username);
+					if (this.pendingLoginCode) {
+						this.adapter.rLog("HTTP", null, "Info", "Cloud", undefined, "Using queued 2FA login code; skipping new email code request.", "info");
+					} else {
+						// 1. Request Email Code
+						await this.requestEmailCode(this.adapter.config.username);
+					}
 
 					const codeTarget = String(this.adapter.namespace || "").startsWith("node-red")
 						? "Please send the 6-digit code to a Roborock Node-RED node using action 'login-code' and msg.payload = '<code>'."
@@ -275,6 +289,13 @@ export class http_api {
 					try {
 						code = await new Promise<string>((resolve, reject) => {
 							this.loginCodeResolver = resolve;
+							if (this.pendingLoginCode) {
+								const pendingLoginCode = this.pendingLoginCode;
+								this.pendingLoginCode = null;
+								this.loginCodeResolver = null;
+								resolve(pendingLoginCode);
+								return;
+							}
 							// Timeout after 15 minutes
 							setTimeout(() => {
 								if (this.loginCodeResolver) {
