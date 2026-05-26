@@ -153,7 +153,7 @@ class mqtt_api {
      */
     async subscribe_mqtt_events(client) {
         const rriot = this.adapter.http_api.get_rriot();
-        return new Promise((resolveSubscription, rejectSubscription) => {
+        const subscriptionPromise = new Promise((resolveSubscription, rejectSubscription) => {
             let initialSubscriptionHandled = false;
             const doSubscribe = () => {
                 this.connected = true;
@@ -215,6 +215,7 @@ class mqtt_api {
             this.adapter.rLog("MQTT", null, "Info", undefined, undefined, "MQTT connection went offline.", "warn");
             this.connected = false;
         });
+        return subscriptionPromise;
     }
     /**
      * Sets up the listener for incoming MQTT messages.
@@ -251,7 +252,7 @@ class mqtt_api {
                         }
                     }
                 }
-                const allMessages = this.adapter.requestsHandler.messageParser.decodeMsg(message, duid);
+                const allMessages = this.adapter.requestsHandler.messageParser.decodeMsg(message, finalDuid);
                 for (const data of allMessages) {
                     await this.handleDecodedMessage(finalDuid, data);
                 }
