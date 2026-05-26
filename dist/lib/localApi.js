@@ -740,7 +740,7 @@ class local_api {
     ensureUdpDiscoveryServer() {
         if (this.discoveryServer)
             return;
-        const socketOptions = process.platform === "win32" ? { type: "udp4", reuseAddr: true } : { type: "udp4", reusePort: true };
+        const socketOptions = { type: "udp4", reuseAddr: true };
         const server = dgram.createSocket(socketOptions);
         this.discoveryServer = server;
         server.on("message", (msg) => this.handleUdpDiscoveryMessage(msg));

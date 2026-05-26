@@ -797,7 +797,7 @@ export class local_api {
 	private ensureUdpDiscoveryServer(): void {
 		if (this.discoveryServer) return;
 
-		const socketOptions: dgram.SocketOptions = process.platform === "win32" ? { type: "udp4", reuseAddr: true } : { type: "udp4", reusePort: true };
+		const socketOptions: dgram.SocketOptions = { type: "udp4", reuseAddr: true };
 		const server = dgram.createSocket(socketOptions);
 		this.discoveryServer = server;
 
