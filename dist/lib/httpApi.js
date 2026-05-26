@@ -203,11 +203,14 @@ class http_api {
                     this.adapter.rLog("HTTP", null, "Info", "Cloud", undefined, "Starting Direct 2FA Login Flow...", "info");
                     // 1. Request Email Code
                     await this.requestEmailCode(this.adapter.config.username);
+                    const codeTarget = String(this.adapter.namespace || "").startsWith("node-red")
+                        ? "Please send the 6-digit code to a Roborock Node-RED node using action 'login-code' and msg.payload = '<code>'."
+                        : "Please enter the 6-digit code into the state 'roborock.0.loginCode' immediately.";
                     const warning = [
                         "********************************************************************************",
                         "ATTENTION: 2FA Code required!",
                         `An email has been sent to ${this.adapter.config.username}.`,
-                        "Please enter the 6-digit code into the state 'roborock.0.loginCode' immediately.",
+                        codeTarget,
                         "********************************************************************************"
                     ].join("\n");
                     this.adapter.rLog("HTTP", null, "Error", "Cloud", undefined, warning, "error");
